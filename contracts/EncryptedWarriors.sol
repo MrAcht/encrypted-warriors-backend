@@ -162,4 +162,22 @@ contract EncryptedWarriors {
     function getCombatResult() public view returns (CombatOutcome) {
         return lastCombatOutcome;
     }
+
+    /**
+     * @dev Allows the caller to retrieve their own encrypted unit stats,
+     * re-encrypted under their FHE public key for client-side decryption.
+     * @return encryptedAttack The caller's encrypted attack value as bytes.
+     * @return encryptedDefense The caller's encrypted defense value as bytes.
+     */
+    function getMyEncryptedUnitStats() public view onlyGamePlayers returns (bytes memory encryptedAttack, bytes memory encryptedDefense) {
+        require(playersWarriors[msg.sender].deployed, "You have no unit deployed to reveal stats for.");
+
+        // Re-encrypt the stored euint8s with the caller's FHE public key.
+        // TFHE.callerPublicKey() retrieves the FHE public key provided by the caller's transaction.
+        // This allows the caller to decrypt the returned bytes using their private FHE key client-side.
+        return (
+            TFHE.reencrypt(playersWarriors[msg.sender].encryptedAttack, TFHE.callerPublicKey()),
+            TFHE.reencrypt(playersWarriors[msg.sender].encryptedDefense, TFHE.callerPublicKey())
+        );
+    }
 }
