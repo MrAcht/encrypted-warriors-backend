@@ -114,4 +114,52 @@ contract EncryptedWarriors {
 
         emit UnitDeployed(msg.sender);
     }
+
+    /**
+     * @dev Initiates a confidential combat between two deployed units.
+     * The combat outcome is determined using FHE operations on encrypted attributes.
+     * A public outcome (ATTACKER_WINS, DEFENDER_WINS, DRAW) is set on-chain.
+     * @param _attacker The address of the attacking player.
+     * @param _defender The address of the defending player.
+     */
+    function attack(address _attacker, address _defender) public onlyGamePlayers requireTwoPlayers {
+        // Ensure both attacker and defender have deployed their units
+        require(playersWarriors[_attacker].deployed, "Attacker unit not deployed.");
+        require(playersWarriors[_defender].deployed, "Defender unit not deployed.");
+        // Ensure the caller is either the attacker or defender (simplified access)
+        require(msg.sender == _attacker || msg.sender == _defender, "Only involved players can initiate combat.");
+
+        Warrior storage attackerUnit = playersWarriors[_attacker];
+        Warrior storage defenderUnit = playersWarriors[_defender];
+
+        // --- Confidential Combat Logic using FHE operations ---
+        // Compare attacker's encryptedAttack with defender's encryptedDefense
+        ebool attackerWins = TFHE.gt(attackerUnit.encryptedAttack, defenderUnit.encryptedDefense); // Is attack > defense?
+        ebool defenderWins = TFHE.gt(defenderUnit.encryptedDefense, attackerUnit.encryptedAttack); // Is defense > attack?
+        ebool isDraw = TFHE.eq(attackerUnit.encryptedAttack, defenderUnit.encryptedDefense); // Is attack == defense?
+
+        // --- Public Outcome Revelation ---
+        // TFHE.decrypt can be called on an ebool within the contract to get its boolean plaintext.
+        // This makes the combat outcome publicly verifiable, while the exact stats remain private.
+        // In more complex scenarios, specific access control or multi-party decryption might be used.
+        if (TFHE.decrypt(attackerWins)) {
+            lastCombatOutcome = CombatOutcome.ATTACKER_WINS;
+        } else if (TFHE.decrypt(defenderWins)) {
+            lastCombatOutcome = CombatOutcome.DEFENDER_WINS;
+        } else if (TFHE.decrypt(isDraw)) {
+            lastCombatOutcome = CombatOutcome.DRAW;
+        } else {
+            // Fallback, should not be reached if logic is exhaustive
+            lastCombatOutcome = CombatOutcome.NO_COMBAT;
+        }
+
+        emit CombatConcluded(_attacker, _defender, lastCombatOutcome);
+    }
+
+    /**
+     * @dev Returns the last publicly revealed combat outcome.
+     */
+    function getCombatResult() public view returns (CombatOutcome) {
+        return lastCombatOutcome;
+    }
 }
