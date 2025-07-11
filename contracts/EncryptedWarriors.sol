@@ -49,4 +49,44 @@ contract EncryptedWarriors {
     event UnitDeployed(address indexed playerAddress);
     // Emitted after combat, with the public outcome
     event CombatConcluded(address indexed attacker, address indexed defender, CombatOutcome outcome);
+
+    // --- Modifiers ---
+    // Ensures the caller is one of the registered game players
+    modifier onlyGamePlayers() {
+        require(msg.sender == player1 || msg.sender == player2, "Not a registered game player.");
+        _;
+    }
+
+    // Ensures the caller does not already have a unit deployed
+    modifier onlyEmptySlot() {
+        require(!playersWarriors[msg.sender].deployed, "You already have a unit deployed.");
+        _;
+    }
+
+    // Ensures both players have joined the game
+    modifier requireTwoPlayers() {
+        require(playersJoined == MAX_PLAYERS, "Waiting for all players to join.");
+        _;
+    }
+
+    // --- Functions ---
+
+    /**
+     * @dev Allows a player to join the game. Limited to MAX_PLAYERS.
+     */
+    function joinGame() public {
+        require(playersJoined < MAX_PLAYERS, "Game is full.");
+
+        if (playersJoined == 0) {
+            player1 = msg.sender;
+        } else if (playersJoined == 1 && msg.sender != player1) {
+            player2 = msg.sender;
+        } else {
+            // This case handles attempts to join by player1 again if player2 hasn't joined,
+            // or if player2 tries to join but player1 is still the only one.
+            revert("Already joined or invalid state to join.");
+        }
+        playersJoined++;
+        emit PlayerJoined(msg.sender, playersJoined);
+    }
 }
