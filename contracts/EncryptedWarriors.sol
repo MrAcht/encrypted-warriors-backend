@@ -89,4 +89,29 @@ contract EncryptedWarriors {
         playersJoined++;
         emit PlayerJoined(msg.sender, playersJoined);
     }
+
+    /**
+     * @dev Allows a player to deploy their unit with encrypted attack and defense.
+     * The values are encrypted client-side and passed as bytes, then converted
+     * to euint8 on-chain using TFHE.asEuint8.
+     * @param _encryptedAttack The encrypted attack value as bytes.
+     * @param _encryptedDefense The encrypted defense value as bytes.
+     */
+    function deployUnit(bytes calldata _encryptedAttack, bytes calldata _encryptedDefense)
+        public
+        onlyGamePlayers
+        onlyEmptySlot
+        requireTwoPlayers // Ensure both players are in before deploying units
+    {
+        // Convert bytes (received from client) to euint8.
+        // TFHE.asEuint8 verifies the Zero-Knowledge Proof (ZKPoK) and returns an euint8.
+        euint8 attack = TFHE.asEuint8(_encryptedAttack);
+        euint8 defense = TFHE.asEuint8(_encryptedDefense);
+
+        // Store the encrypted attributes in the player's Warrior struct.
+        // These values remain encrypted on the blockchain.
+        playersWarriors[msg.sender] = Warrior(attack, defense, true);
+
+        emit UnitDeployed(msg.sender);
+    }
 }
