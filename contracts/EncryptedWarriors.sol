@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-// Import Zama's FHE library for encrypted data types and operations
-import "fhevm/lib/TFHE.sol";
+import { FHE, euint8, ebool, externalEuint8 } from "@fhevm/solidity/lib/FHE.sol";
+import { SepoliaConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
 
 /**
  * @title EncryptedWarriors
@@ -11,106 +11,127 @@ import "fhevm/lib/TFHE.sol";
  * Unit attack and defense values are kept encrypted on-chain, and combat
  * outcomes are computed confidentially.
  */
-contract EncryptedWarriors {
-    // Enum to represent the public outcome of a combat
+contract EncryptedWarriors is SepoliaConfig {
     enum CombatOutcome {
-        NO_COMBAT,      // Initial state, or no combat has occurred
-        ATTACKER_WINS,  // Attacker's encryptedAttack > Defender's encryptedDefense
-        DEFENDER_WINS,  // Defender's encryptedDefense > Attacker's encryptedAttack
-        DRAW            // Attacker's encryptedAttack == Defender's encryptedDefense
+        NO_COMBAT,
+        ATTACKER_WINS,
+        DEFENDER_WINS,
+        DRAW
     }
 
-    // Struct to define a Warrior unit with encrypted attributes
     struct Warrior {
-        euint8 encryptedAttack;  // Encrypted attack value (0-255)
-        euint8 encryptedDefense; // Encrypted defense value (0-255)
-        bool deployed;           // True if the player has deployed a unit
+        euint8 encryptedAttack;
+        euint8 encryptedDefense;
+        bool deployed;
     }
 
-    // --- State Variables ---
-    // Mapping to store each player's Warrior unit
-    mapping(address => Warrior) public playersWarriors;
+    struct Game {
+        address creator;
+        address player2;
+        bool started;
+        // Add more fields as needed
+    }
 
-    // Addresses of the two players in the game
+    mapping(address => Warrior) public playersWarriors;
     address public player1;
     address public player2;
-
-    // Constants for game rules
     uint256 public constant MAX_PLAYERS = 2;
-    uint256 public playersJoined = 0; // Counter for players who have joined
+    uint256 public playersJoined = 0;
 
-    // Stores the outcome of the last combat, publicly visible
+    // Publicly visible outcome, set by an authorized party after off-chain decryption
     CombatOutcome public lastCombatOutcome;
 
-    // --- Events ---
-    // Emitted when a player joins the game
-    event PlayerJoined(address indexed playerAddress, uint256 totalPlayers);
-    // Emitted when a unit is deployed
-    event UnitDeployed(address indexed playerAddress);
-    // Emitted after combat, with the public outcome
-    event CombatConcluded(address indexed attacker, address indexed defender, CombatOutcome outcome);
+    // New state variables to store encrypted combat results
+    ebool public encryptedAttackerWins;
+    ebool public encryptedDefenderWins;
+    ebool public encryptedIsDraw;
 
-    // --- Modifiers ---
-    // Ensures the caller is one of the registered game players
+    // Owner of the contract, typically the deployer, who can submit public outcomes
+    address public owner;
+
+    mapping(bytes32 => Game) public games;
+    mapping(address => bytes32) public playerGameCode; // Optional: track which game a player is in
+
+    event GameCreated(bytes32 indexed code, address indexed creator);
+    event PlayerJoined(bytes32 indexed code, address indexed player);
+    event UnitDeployed(address indexed playerAddress);
+    event CombatConcluded(address indexed attacker, address indexed defender, CombatOutcome outcome);
+    event EncryptedCombatResultsStored(address indexed attacker, address indexed defender);
+    event PublicOutcomeSubmitted(CombatOutcome outcome);
+
+    constructor() {
+        owner = msg.sender;
+    }
+
     modifier onlyGamePlayers() {
         require(msg.sender == player1 || msg.sender == player2, "Not a registered game player.");
         _;
     }
 
-    // Ensures the caller does not already have a unit deployed
     modifier onlyEmptySlot() {
         require(!playersWarriors[msg.sender].deployed, "You already have a unit deployed.");
         _;
     }
 
-    // Ensures both players have joined the game
     modifier requireTwoPlayers() {
         require(playersJoined == MAX_PLAYERS, "Waiting for all players to join.");
         _;
     }
 
-    // --- Functions ---
-
-    /**
-     * @dev Allows a player to join the game. Limited to MAX_PLAYERS.
-     */
-    function joinGame() public {
-        require(playersJoined < MAX_PLAYERS, "Game is full.");
-
-        if (playersJoined == 0) {
-            player1 = msg.sender;
-        } else if (playersJoined == 1 && msg.sender != player1) {
-            player2 = msg.sender;
-        } else {
-            // This case handles attempts to join by player1 again if player2 hasn't joined,
-            // or if player2 tries to join but player1 is still the only one.
-            revert("Already joined or invalid state to join.");
-        }
-        playersJoined++;
-        emit PlayerJoined(msg.sender, playersJoined);
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only the contract owner can call this function.");
+        _;
     }
 
-    /**
-     * @dev Allows a player to deploy their unit with encrypted attack and defense.
-     * The values are encrypted client-side and passed as bytes, then converted
-     * to euint8 on-chain using TFHE.asEuint8.
-     * @param _encryptedAttack The encrypted attack value as bytes.
-     * @param _encryptedDefense The encrypted defense value as bytes.
-     */
-    function deployUnit(bytes calldata _encryptedAttack, bytes calldata _encryptedDefense)
+    // Create a new game and generate a random code
+    function createGame() external returns (bytes32) {
+        bytes32 code = keccak256(abi.encodePacked(msg.sender, block.timestamp, blockhash(block.number - 1)));
+        require(games[code].creator == address(0), "Game already exists");
+        games[code] = Game(msg.sender, address(0), false);
+        playerGameCode[msg.sender] = code;
+        emit GameCreated(code, msg.sender);
+        return code;
+    }
+
+    // Join a game by code
+    function joinGame(bytes32 code) external {
+        require(games[code].creator != address(0), "Game does not exist");
+        require(games[code].player2 == address(0), "Game already full");
+        require(games[code].creator != msg.sender, "Creator cannot join their own game");
+        games[code].player2 = msg.sender;
+        games[code].started = true;
+        playerGameCode[msg.sender] = code;
+        emit PlayerJoined(code, msg.sender);
+    }
+
+    // Example: get game info by code
+    function getGame(bytes32 code) external view returns (address, address, bool) {
+        Game memory g = games[code];
+        return (g.creator, g.player2, g.started);
+    }
+
+    // Add your other game logic here, using 'code' instead of 'gameId'
+
+    function deployUnit(
+        externalEuint8 _encryptedAttack,
+        bytes calldata _attackProof,
+        externalEuint8 _encryptedDefense,
+        bytes calldata _defenseProof
+    )
         public
         onlyGamePlayers
         onlyEmptySlot
-        requireTwoPlayers // Ensure both players are in before deploying units
+        requireTwoPlayers
     {
-        // Convert bytes (received from client) to euint8.
-        // TFHE.asEuint8 verifies the Zero-Knowledge Proof (ZKPoK) and returns an euint8.
-        euint8 attack = TFHE.asEuint8(_encryptedAttack);
-        euint8 defense = TFHE.asEuint8(_encryptedDefense);
+        euint8 unitAttack = FHE.fromExternal(_encryptedAttack, _attackProof);
+        euint8 unitDefense = FHE.fromExternal(_encryptedDefense, _defenseProof);
 
-        // Store the encrypted attributes in the player's Warrior struct.
-        // These values remain encrypted on the blockchain.
-        playersWarriors[msg.sender] = Warrior(attack, defense, true);
+        playersWarriors[msg.sender] = Warrior(unitAttack, unitDefense, true);
+
+        FHE.allowThis(unitAttack);
+        FHE.allow(unitAttack, msg.sender);
+        FHE.allowThis(unitDefense);
+        FHE.allow(unitDefense, msg.sender);
 
         emit UnitDeployed(msg.sender);
     }
@@ -118,42 +139,45 @@ contract EncryptedWarriors {
     /**
      * @dev Initiates a confidential combat between two deployed units.
      * The combat outcome is determined using FHE operations on encrypted attributes.
-     * A public outcome (ATTACKER_WINS, DEFENDER_WINS, DRAW) is set on-chain.
+     * The encrypted results are stored on-chain for later off-chain decryption.
      * @param _attacker The address of the attacking player.
      * @param _defender The address of the defending player.
      */
     function attack(address _attacker, address _defender) public onlyGamePlayers requireTwoPlayers {
-        // Ensure both attacker and defender have deployed their units
         require(playersWarriors[_attacker].deployed, "Attacker unit not deployed.");
         require(playersWarriors[_defender].deployed, "Defender unit not deployed.");
-        // Ensure the caller is either the attacker or defender (simplified access)
         require(msg.sender == _attacker || msg.sender == _defender, "Only involved players can initiate combat.");
 
         Warrior storage attackerUnit = playersWarriors[_attacker];
         Warrior storage defenderUnit = playersWarriors[_defender];
 
         // --- Confidential Combat Logic using FHE operations ---
-        // Compare attacker's encryptedAttack with defender's encryptedDefense
-        ebool attackerWins = TFHE.gt(attackerUnit.encryptedAttack, defenderUnit.encryptedDefense); // Is attack > defense?
-        ebool defenderWins = TFHE.gt(defenderUnit.encryptedDefense, attackerUnit.encryptedAttack); // Is defense > attack?
-        ebool isDraw = TFHE.eq(attackerUnit.encryptedAttack, defenderUnit.encryptedDefense); // Is attack == defense?
+        // Store the encrypted boolean results in state variables
+        encryptedAttackerWins = FHE.gt(attackerUnit.encryptedAttack, defenderUnit.encryptedDefense);
+        encryptedDefenderWins = FHE.gt(defenderUnit.encryptedDefense, attackerUnit.encryptedAttack);
+        encryptedIsDraw = FHE.eq(attackerUnit.encryptedAttack, defenderUnit.encryptedAttack);
 
-        // --- Public Outcome Revelation ---
-        // TFHE.decrypt can be called on an ebool within the contract to get its boolean plaintext.
-        // This makes the combat outcome publicly verifiable, while the exact stats remain private.
-        // In more complex scenarios, specific access control or multi-party decryption might be used.
-        if (TFHE.decrypt(attackerWins)) {
-            lastCombatOutcome = CombatOutcome.ATTACKER_WINS;
-        } else if (TFHE.decrypt(defenderWins)) {
-            lastCombatOutcome = CombatOutcome.DEFENDER_WINS;
-        } else if (TFHE.decrypt(isDraw)) {
-            lastCombatOutcome = CombatOutcome.DRAW;
-        } else {
-            // Fallback, should not be reached if logic is exhaustive
-            lastCombatOutcome = CombatOutcome.NO_COMBAT;
-        }
+        // Grant contract owner permission to re-encrypt these ebools for off-chain decryption
+        FHE.allow(encryptedAttackerWins, owner);
+        FHE.allow(encryptedDefenderWins, owner);
+        FHE.allow(encryptedIsDraw, owner);
 
-        emit CombatConcluded(_attacker, _defender, lastCombatOutcome);
+        emit EncryptedCombatResultsStored(_attacker, _defender);
+    }
+
+    /**
+     * @dev Allows the contract owner to submit the public combat outcome after off-chain decryption.
+     * This function should be called by an off-chain relayer or the owner after decrypting
+     * the `encryptedAttackerWins`, `encryptedDefenderWins`, and `encryptedIsDraw` values.
+     * @param _outcome The plaintext combat outcome.
+     */
+    function submitCombatOutcome(CombatOutcome _outcome) public onlyOwner {
+        lastCombatOutcome = _outcome;
+        emit PublicOutcomeSubmitted(_outcome);
+        // Optionally, clear the encrypted results after they've been publicly revealed
+        // encryptedAttackerWins = ebool(0); // Resetting ebools might require specific FHE library methods or be omitted
+        // encryptedDefenderWins = ebool(0);
+        // encryptedIsDraw = ebool(0);
     }
 
     /**
@@ -164,20 +188,34 @@ contract EncryptedWarriors {
     }
 
     /**
-     * @dev Allows the caller to retrieve their own encrypted unit stats,
-     * re-encrypted under their FHE public key for client-side decryption.
-     * @return encryptedAttack The caller's encrypted attack value as bytes.
-     * @return encryptedDefense The caller's encrypted defense value as bytes.
+     * @dev Allows the caller to retrieve their own encrypted unit stats.
+     * The client-side `fhevmjs` library will handle re-encryption and decryption.
+     * @return encryptedAttack The caller's encrypted attack value.
+     * @return encryptedDefense The caller's encrypted defense value.
      */
-    function getMyEncryptedUnitStats() public view onlyGamePlayers returns (bytes memory encryptedAttack, bytes memory encryptedDefense) {
+    function getMyEncryptedUnitStats() public view onlyGamePlayers returns (euint8 encryptedAttack, euint8 encryptedDefense) {
         require(playersWarriors[msg.sender].deployed, "You have no unit deployed to reveal stats for.");
 
-        // Re-encrypt the stored euint8s with the caller's FHE public key.
-        // TFHE.callerPublicKey() retrieves the FHE public key provided by the caller's transaction.
-        // This allows the caller to decrypt the returned bytes using their private FHE key client-side.
+        // Return the raw encrypted values; re-encryption happens client-side
         return (
-            TFHE.reencrypt(playersWarriors[msg.sender].encryptedAttack, TFHE.callerPublicKey()),
-            TFHE.reencrypt(playersWarriors[msg.sender].encryptedDefense, TFHE.callerPublicKey())
+            playersWarriors[msg.sender].encryptedAttack,
+            playersWarriors[msg.sender].encryptedDefense
+        );
+    }
+
+    /**
+     * @dev Allows the contract owner to retrieve the encrypted combat results.
+     * The client-side `fhevmjs` library will handle re-encryption and decryption.
+     * @return attackerWins The encrypted attacker wins result.
+     * @return defenderWins The encrypted defender wins result.
+     * @return isDraw The encrypted draw result.
+     */
+    function getEncryptedCombatResults() public view onlyOwner returns (ebool attackerWins, ebool defenderWins, ebool isDraw) {
+        // Return the raw encrypted values; re-encryption happens client-side
+        return (
+            encryptedAttackerWins,
+            encryptedDefenderWins,
+            encryptedIsDraw
         );
     }
 }

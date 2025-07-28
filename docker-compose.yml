@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  deployer:
+    build: .
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./.env:/app/.env
+    working_dir: /app
+    environment:
+      - NODE_ENV=development
+      - PRIVATE_KEY=${PRIVATE_KEY}
+    command: tail -f /dev/null  # Keeps the container running for exec
+    networks:
+      - encrypted-warriors
+
+  frontend:
+    build: 
+      context: ./encrypted-warriors-frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./encrypted-warriors-frontend:/app
+      - /app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    networks:
+      - encrypted-warriors
+
+networks:
+  encrypted-warriors:
+    driver: bridge 

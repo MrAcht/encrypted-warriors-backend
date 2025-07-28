@@ -1,21 +1,19 @@
-// scripts/deploy.js
-const hre = require("hardhat");
+const { ethers } = require("hardhat")
 
 async function main() {
-  const [deployer] = await hre.ethers.getSigners();
-  console.log("Deploying contracts with the account:", deployer.address);
+  console.log("Deploying EncryptedWarriors contract...")
 
-  const EncryptedWarriors = await hre.ethers.getContractFactory("EncryptedWarriors");
-  const encryptedWarriors = await EncryptedWarriors.deploy();
+  const EncryptedWarriors = await ethers.getContractFactory("EncryptedWarriors")
+  const encryptedWarriors = await EncryptedWarriors.deploy()
 
-  await encryptedWarriors.deployed();
+  await encryptedWarriors.waitForDeployment()
 
-  console.log("EncryptedWarriors deployed to:", encryptedWarriors.address);
+  console.log("EncryptedWarriors deployed to:", await encryptedWarriors.getAddress())
 }
 
 main()
   .then(() => process.exit(0))
   .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+    console.error(error)
+    process.exit(1)
+  })
